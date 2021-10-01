@@ -270,7 +270,7 @@ GEM
     network_interface (0.0.2)
     nexpose (7.3.0)
     nio4r (2.5.8)
-    nokogiri (1.12.2)
+    nokogiri (1.12.5)
       mini_portile2 (~> 2.6.1)
       racc (~> 1.4)
     octokit (4.21.0)
