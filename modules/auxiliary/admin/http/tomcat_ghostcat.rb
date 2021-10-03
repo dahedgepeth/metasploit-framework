@@ -28,16 +28,14 @@ class MetasploitModule < Msf::Auxiliary
           It is likely that users upgrading to 9.0.31, 8.5.51 or 7.0.100 or later will need to make small changes
           to their configurations.
         },
-        'Author' =>
-          [
-            'A Security Researcher of Chaitin Tech', # POC
-            'SunCSR Team' # Metasploit Module
-          ],
+        'Author' => [
+          'A Security Researcher of Chaitin Tech', # POC
+          'SunCSR Team' # Metasploit Module
+        ],
         'License' => MSF_LICENSE,
-        'References' =>
-          [
-            ['CVE', '2020-1938']
-          ],
+        'References' => [
+          ['CVE', '2020-1938']
+        ],
         'DisclosureDate' => '2020-02-20'
       )
     )
@@ -269,9 +267,17 @@ class MetasploitModule < Msf::Auxiliary
   end
 
   def read_success?(header)
-    status_code = header.match(/Status Code: [0-9]{3}*/).to_s.split(/ /)[2]
+    # As far as we can tell, a successful status code can be either:
+    # 200
+    # 200 OK
+    # OK
+    # And so this should handle all three.
+    # See this issue for more details:
+    # https://github.com/rapid7/metasploit-framework/issues/15673
 
-    status_code == '200'
+    status_code = header.scan(/Status Code: (\w+)/).flatten.first
+
+    (status_code == '200' || status_code == 'OK')
   end
 
   def read_remote_file

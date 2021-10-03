@@ -412,7 +412,7 @@ RSpec.describe "Metasploit's json-rpc" do
   end
 
   describe 'analyze' do
-    let(:host_ip) { '192.0.2.2' }
+    let(:host_ip) { Faker::Internet.private_ip_v4_address }
     let(:host) do
       {
         workspace: 'default',
@@ -443,7 +443,6 @@ RSpec.describe "Metasploit's json-rpc" do
       let(:vuln_refs) do
         %w[
           CVE-2017-0143
-          CVE-2016-3088
         ]
       end
 
@@ -464,12 +463,8 @@ RSpec.describe "Metasploit's json-rpc" do
             result: {
               host: [
                 {
-                  address: '192.0.2.2',
+                  address: host_ip,
                   modules: [
-                    {
-                      mname: 'exploit/multi/http/apache_activemq_upload_jsp',
-                      mtype: 'exploit'
-                    },
                     {
                       mtype: 'exploit',
                       mname: 'exploit/windows/smb/ms17_010_eternalblue'
@@ -514,12 +509,8 @@ RSpec.describe "Metasploit's json-rpc" do
             result: {
               host: [
                 {
-                  address: '192.0.2.2',
+                  address: host_ip,
                   modules: [
-                    {
-                      mname: 'exploit/multi/http/apache_activemq_upload_jsp',
-                      mtype: 'exploit'
-                    },
                     {
                       mtype: 'exploit',
                       mname: 'exploit/windows/smb/ms17_010_eternalblue'
@@ -570,7 +561,7 @@ RSpec.describe "Metasploit's json-rpc" do
           result: {
             host: [
               {
-                address: '192.0.2.2',
+                address: host_ip,
                 modules: []
               }
             ]
