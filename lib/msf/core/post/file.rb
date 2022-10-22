@@ -13,8 +13,12 @@ module Msf::Post::File
         'Compat' => {
           'Meterpreter' => {
             'Commands' => %w[
-              core_channel_*
+              core_channel_eof
+              core_channel_open
+              core_channel_read
+              core_channel_write
               stdapi_fs_chdir
+              stdapi_fs_chmod
               stdapi_fs_delete_dir
               stdapi_fs_delete_file
               stdapi_fs_file_expand_path
@@ -22,6 +26,7 @@ module Msf::Post::File
               stdapi_fs_getwd
               stdapi_fs_ls
               stdapi_fs_mkdir
+              stdapi_fs_separator
               stdapi_fs_stat
             ]
           }
@@ -246,7 +251,7 @@ module Msf::Post::File
     end
     raise "`writable?' method does not support Windows systems" if session.platform == 'windows'
 
-    cmd_exec("test -w '#{path}' && echo true").to_s.include? 'true'
+    cmd_exec("(test -w '#{path}' || test -O '#{path}') && echo true").to_s.include? 'true'
   end
 
   #
@@ -347,31 +352,98 @@ module Msf::Post::File
   #
   # Returns a MD5 checksum of a given remote file
   #
-  # @note THIS DOWNLOADS THE FILE
+  # @note For shell sessions,
+  #       this method downloads the file from the remote host
+  #       unless a hashing utility for use on the remote host is specified.
+  #
   # @param file_name [String] Remote file name
+  # @option util [String] Remote file hashing utility
   # @return [String] Hex digest of file contents
-  def file_remote_digestmd5(file_name)
-    data = read_file(file_name)
-    chksum = nil
-    if data
+  def file_remote_digestmd5(file_name, util: nil)
+    if session.type == 'meterpreter'
+      begin
+        return session.fs.file.md5(file_name)&.unpack('H*').flatten.first
+      rescue StandardError => e
+        print_error("Exception while running #{__method__}: #{e}")
+        return nil
+      end
+    end
+
+    # Note: This will fail on files larger than 2GB
+    if session.type == 'powershell'
+      data = cmd_exec("$md5 = New-Object -TypeName System.Security.Cryptography.MD5CryptoServiceProvider; [System.BitConverter]::ToString($md5.ComputeHash([System.IO.File]::ReadAllBytes('#{file_name}')))")
+      return unless data
+
+      chksum = data.scan(/^([A-F0-9-]+)$/).flatten.first
+      return chksum&.gsub(/-/, '')&.downcase
+    end
+
+    case util
+    when 'md5'
+      chksum = session.shell_command_token("md5 -q '#{file_name}'")&.strip
+    when 'md5sum'
+      chksum = session.shell_command_token("md5sum '#{file_name}'")&.strip.split.first
+    when 'certutil'
+      data = session.shell_command_token("certutil -hashfile \"#{file_name}\" MD5")
+      return unless data
+      chksum = data.scan(/^([a-f0-9 ]{47})\r?\n/).flatten.first&.gsub(/\s*/, '')
+    else
+      data = read_file(file_name)
+      return unless data
       chksum = Digest::MD5.hexdigest(data)
     end
-    return chksum
+
+    return unless chksum =~ /\A[a-f0-9]{32}\z/
+
+    chksum
   end
 
   #
   # Returns a SHA1 checksum of a given remote file
   #
-  # @note THIS DOWNLOADS THE FILE
+  # @note For shell sessions,
+  #       this method downloads the file from the remote host
+  #       unless a hashing utility for use on the remote host is specified.
+  #
   # @param file_name [String] Remote file name
+  # @option util [String] Remote file hashing utility
   # @return [String] Hex digest of file contents
-  def file_remote_digestsha1(file_name)
-    data = read_file(file_name)
-    chksum = nil
-    if data
+  def file_remote_digestsha1(file_name, util: nil)
+    if session.type == 'meterpreter'
+      begin
+        return session.fs.file.sha1(file_name)&.unpack('H*').flatten.first
+      rescue StandardError => e
+        print_error("Exception while running #{__method__}: #{e}")
+        return nil
+      end
+    end
+
+    # Note: This will fail on files larger than 2GB
+    if session.type == 'powershell'
+      data = cmd_exec("$sha1 = New-Object -TypeName System.Security.Cryptography.SHA1CryptoServiceProvider; [System.BitConverter]::ToString($sha1.ComputeHash([System.IO.File]::ReadAllBytes('#{file_name}')))")
+      return unless data
+      chksum = data.scan(/^([A-F0-9-]+)$/).flatten.first
+      return chksum&.gsub(/-/, '')&.downcase
+    end
+
+    case util
+    when 'sha1'
+      chksum = session.shell_command_token("sha1 -q '#{file_name}'")&.strip
+    when 'sha1sum'
+      chksum = session.shell_command_token("sha1sum '#{file_name}'")&.strip.split.first
+    when 'certutil'
+      data = session.shell_command_token("certutil -hashfile \"#{file_name}\" SHA1")
+      return unless data
+      chksum = data.scan(/^([a-f0-9 ]{59})\r?\n/).flatten.first&.gsub(/\s*/, '')
+    else
+      data = read_file(file_name)
+      return unless data
       chksum = Digest::SHA1.hexdigest(data)
     end
-    return chksum
+
+    return unless chksum =~ /\A[a-f0-9]{40}\z/
+
+    chksum
   end
 
   #
@@ -427,25 +499,26 @@ module Msf::Post::File
   #
   # @param file_name [String] Remote file name to write
   # @param data [String] Contents to put in the file
-  # @return [void]
+  # @return bool
   def write_file(file_name, data)
     if session.type == 'meterpreter'
-      fd = session.fs.file.new(file_name, 'wb')
-      fd.write(data)
-      fd.close
+      return _write_file_meterpreter(file_name, data)
     elsif session.type == 'powershell'
       _write_file_powershell(file_name, data)
     elsif session.respond_to? :shell_command_token
       if session.platform == 'windows'
         if _can_echo?(data)
-          return _win_ansi_write_file(file_name, data)
+          _win_ansi_write_file(file_name, data)
         else
-          return _win_bin_write_file(file_name, data)
+          _win_bin_write_file(file_name, data)
         end
       else
-        return _write_file_unix_shell(file_name, data)
+        _write_file_unix_shell(file_name, data)
       end
+    else
+      return false
     end
+    true
   end
 
   #
@@ -456,9 +529,7 @@ module Msf::Post::File
   # @return bool
   def append_file(file_name, data)
     if session.type == 'meterpreter'
-      fd = session.fs.file.new(file_name, 'ab')
-      fd.write(data)
-      fd.close
+      return _write_file_meterpreter(file_name, data, 'ab')
     elsif session.type == 'powershell'
       _append_file_powershell(file_name, data)
     elsif session.respond_to? :shell_command_token
@@ -469,7 +540,7 @@ module Msf::Post::File
           return _win_bin_append_file(file_name, data)
         end
       else
-        return _write_file_unix_shell(file_name, data)
+        return _append_file_unix_shell(file_name, data)
       end
     end
     true
@@ -483,7 +554,7 @@ module Msf::Post::File
   # @param local [String] Local file whose contents will be uploaded
   # @return (see #write_file)
   def upload_file(remote, local)
-    write_file(remote, ::File.read(local))
+    write_file(remote, ::File.read(local, mode: 'rb'))
   end
 
   #
@@ -523,6 +594,16 @@ module Msf::Post::File
   def exploit_data(data_directory, file)
     file_path = ::File.join(::Msf::Config.data_directory, 'exploits', data_directory, file)
     ::File.binread(file_path)
+  end
+
+  #
+  # Read a local exploit source file from the external exploits directory
+  #
+  # @param path [String] Directory in the exploits folder
+  # @param path [String] Filename in the source folder
+  def exploit_source(source_directory, file)
+    file_path = ::File.join( Msf::Config.install_root, 'external', 'source', 'exploits', source_directory, file)
+    ::File.read(file_path)
   end
 
   #
@@ -649,16 +730,18 @@ module Msf::Post::File
     else
       file_mode = 'Create'
     end
-    pwsh_code = %($encoded=\"#{encoded_chunk}\";
-    $mstream = [System.IO.MemoryStream]::new([System.Convert]::FromBase64String($encoded));
-    $reader = [System.IO.StreamReader]::new([System.IO.Compression.GZipStream]::new($mstream,[System.IO.Compression.CompressionMode]::Decompress));
-    $filename = [System.IO.File]::Open('#{file_name}', [System.IO.FileMode]::#{file_mode})
-    $file_bytes=[System.Byte[]]::CreateInstance([System.Byte],#{length});
-    $reader.BaseStream.Read($file_bytes,0,$file_bytes.Length);
-    $filename.Write($file_bytes, 0, $file_bytes.Length);
-    $filename.Close();
-    $mstream.Close();
-    $reader.Close();)
+    pwsh_code = <<~PSH
+      $encoded='#{encoded_chunk}';
+      $gzip_bytes=[System.Convert]::FromBase64String($encoded);
+      $mstream = New-Object System.IO.MemoryStream(,$gzip_bytes);
+      $gzipstream = New-Object System.IO.Compression.GzipStream $mstream, ([System.IO.Compression.CompressionMode]::Decompress);
+      $filestream = [System.IO.File]::Open('#{file_name}', [System.IO.FileMode]::#{file_mode});
+      $file_bytes=[System.Byte[]]::CreateInstance([System.Byte],#{length});
+      $gzipstream.Read($file_bytes,0,$file_bytes.Length);
+      $filestream.Write($file_bytes,0,$file_bytes.Length);
+      $filestream.Close();
+      $gzipstream.Close();
+    PSH
     cmd_exec(pwsh_code)
   end
 
@@ -678,47 +761,19 @@ module Msf::Post::File
   end
 
   def _read_file_powershell_fragment(filename, chunk_size, offset = 0)
-    b64_data = cmd_exec("$mstream = [System.IO.MemoryStream]::new();\
-      $gzipstream = [System.IO.Compression.GZipStream]::new($mstream, [System.IO.Compression.CompressionMode]::Compress);\
-      $get_bytes = [System.IO.File]::ReadAllBytes(\"#{filename}\")[#{offset}..#{offset + chunk_size - 1}];\
-      $gzipstream.Write($get_bytes, 0 , $get_bytes.Length);\
-      $gzipstream.Close();\
-      [Convert]::ToBase64String($mstream.ToArray())")
+    pwsh_code = <<~PSH
+      $mstream = New-Object System.IO.MemoryStream;
+      $gzipstream = New-Object System.IO.Compression.GZipStream($mstream, [System.IO.Compression.CompressionMode]::Compress);
+      $get_bytes = [System.IO.File]::ReadAllBytes(\"#{filename}\")[#{offset}..#{offset + chunk_size - 1}];
+      $gzipstream.Write($get_bytes, 0, $get_bytes.Length);
+      $gzipstream.Close();
+      [System.Convert]::ToBase64String($mstream.ToArray());
+    PSH
+    b64_data = cmd_exec(pwsh_code)
     return nil if b64_data.empty?
 
     uncompressed_fragment = Zlib::GzipReader.new(StringIO.new(Base64.decode64(b64_data))).read
     return uncompressed_fragment
-  end
-
-  #
-  # Return a list of the Windows Drives
-  #
-  def get_drives
-    if session.platform != 'windows'
-      return false
-    end
-    drives = []
-    if session.type == "meterpreter" && session.railgun
-      bitmask = session.railgun.kernel32.GetLogicalDrives()["return"]
-      letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-      (0..25).each do |i|
-        label = letters[i,1]
-        rem = bitmask % (2**(i+1))
-        if rem > 0
-          drives << label
-          bitmask = bitmask - rem
-        end
-      end
-    else
-      disks = cmd_exec("wmic logicaldisk get caption").split("\r\n")
-      for disk in disks
-        if /([A-Z]):/ =~ disk
-          drives << disk[0]
-        end
-      end
-    end
-
-    drives
   end
 
 protected
@@ -737,6 +792,17 @@ protected
   end
 
   #
+  # Meterpreter-specific file write. Returns true on success
+  #
+  def _write_file_meterpreter(file_name, data, mode = 'wb')
+    fd = session.fs.file.new(file_name, mode)
+    fd.write(data)
+    fd.close
+    return true
+  rescue ::Rex::Post::Meterpreter::RequestError => e
+    return false
+  end
+
   # Meterpreter-specific file read.  Returns contents of remote file
   # +file_name+ as a String or nil if there was an error
   #
@@ -841,6 +907,17 @@ protected
       file_rm(b64_filename)
       file_rm(tmp_filename)
     end
+  end
+
+  #
+  # Append +data+ to the remote file +file_name+.
+  #
+  # You should never call this method directly. Instead, call {#append_file}
+  # which will call this method if it is appropriate for the given session.
+  #
+  # @return [void]
+  def _append_file_unix_shell(file_name, data)
+    _write_file_unix_shell(file_name, data, true)
   end
 
   #

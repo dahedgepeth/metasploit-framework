@@ -9,6 +9,16 @@ class Msf::Ui::Console::CommandDispatcher::Developer
     '-e' => [true,  'Expression to evaluate.']
   )
 
+  @@time_opts = Rex::Parser::Arguments.new(
+    ['-h', '--help'] => [ false, 'Help banner.' ],
+    '--cpu' => [false, 'Profile the CPU usage.'],
+    '--memory' => [false,  'Profile the memory usage.']
+  )
+
+  @@_servicemanager_opts = Rex::Parser::Arguments.new(
+    ['-l', '--list'] => [false, 'View the currently running services' ]
+  )
+
   def initialize(driver)
     super
   end
@@ -18,7 +28,7 @@ class Msf::Ui::Console::CommandDispatcher::Developer
   end
 
   def commands
-    {
+    commands = {
       'irb'        => 'Open an interactive Ruby shell in the current context',
       'pry'        => 'Open the Pry debugger on the current module or Framework',
       'edit'       => 'Edit the current module or a file with the preferred editor',
@@ -26,6 +36,10 @@ class Msf::Ui::Console::CommandDispatcher::Developer
       'log'        => 'Display framework.log paged to the end if possible',
       'time'       => 'Time how long it takes to run a particular command'
     }
+    if framework.features.enabled?(Msf::FeatureManager::SERVICEMANAGER_COMMAND)
+      commands['_servicemanager'] = 'Interact with the Rex::ServiceManager'
+    end
+    commands
   end
 
   def local_editor
@@ -77,7 +91,7 @@ class Msf::Ui::Console::CommandDispatcher::Developer
     files = output.split("\n")
 
     files.each do |file|
-      next if file.end_with?('_spec.rb')
+      next if file.end_with?('_spec.rb') || file.end_with?("spec_helper.rb")
       f = File.join(Msf::Config.install_root, file)
       reload_file(f, print_errors: false)
     end
@@ -144,7 +158,7 @@ class Msf::Ui::Console::CommandDispatcher::Developer
   def cmd_irb_tabs(_str, words)
     return [] if words.length > 1
 
-    @@irb_opts.fmt.keys
+    @@irb_opts.option_keys
   end
 
   def cmd_pry_help
@@ -313,28 +327,112 @@ class Msf::Ui::Console::CommandDispatcher::Developer
   end
 
   #
+  # Interact with framework's service manager
+  #
+  def cmd__servicemanager(*args)
+    if args.include?('-h') || args.include?('--help')
+      cmd__servicemanager_help
+      return false
+    end
+
+    opts = {}
+    @@_servicemanager_opts.parse(args) do |opt, idx, val|
+      case opt
+      when '-l', '--list'
+        opts[:list] = true
+      end
+    end
+
+    if opts.empty?
+      opts[:list] = true
+    end
+
+    if opts[:list]
+      table = Rex::Text::Table.new(
+        'Header'  => 'Services',
+        'Indent'  => 1,
+        'Columns' => ['Id', 'Name', 'References']
+      )
+      Rex::ServiceManager.instance.each.with_index do |(name, instance), id|
+        # TODO: Update rex-core to support querying the reference count
+        table << [id, name, instance.instance_variable_get(:@_references)]
+      end
+
+      if table.rows.empty?
+        print_status("No framework services are currently running.")
+      else
+        print_line(table.to_s)
+      end
+    end
+  end
+
+  #
+  # Tab completion for the _servicemanager command
+  #
+  def cmd__servicemanager_tabs(_str, words)
+    return [] if words.length > 1
+
+    @@_servicemanager_opts.option_keys
+  end
+
+  def cmd__servicemanager_help
+    print_line 'Usage: servicemanager'
+    print_line
+    print_line 'Manage running framework services'
+    print @@_servicemanager_opts.usage
+    print_line
+  end
+
+  #
   # Time how long in seconds a command takes to execute
   #
   def cmd_time(*args)
-    start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    command = args.join(' ')
-    driver.run_single(command)
-  ensure
-    end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    elapsed_time = end_time - start_time
-    print_good("Command #{command.inspect} completed in #{elapsed_time} seconds")
+    if args.empty? || args.first == '-h' || args.first == '--help'
+      cmd_time_help
+      return true
+    end
+
+    profiler = nil
+    while args.first == '--cpu' || args.first == '--memory'
+      profiler = args.shift
+    end
+
+    begin
+      start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      command = args.join(' ')
+
+      case profiler
+      when '--cpu'
+        Metasploit::Framework::Profiler.record_cpu do
+          driver.run_single(command)
+        end
+      when '--memory'
+        Metasploit::Framework::Profiler.record_memory do
+          driver.run_single(command)
+        end
+      else
+        driver.run_single(command)
+      end
+    ensure
+      end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      elapsed_time = end_time - start_time
+      print_good("Command #{command.inspect} completed in #{elapsed_time} seconds")
+    end
   end
 
   def cmd_time_help
-    print_line 'Usage: time [command]'
+    print_line 'Usage: time [options] [command]'
     print_line
-    print_line 'Time how long a command takes to execute in seconds'
+    print_line 'Time how long a command takes to execute in seconds. Also supports profiling options.'
     print_line
     print_line '   Usage:'
     print_line '      * time db_import ./db_import.html'
     print_line '      * time show exploits'
     print_line '      * time reload_all'
     print_line '      * time missing_command'
+    print_line '      * time --cpu db_import ./db_import.html'
+    print_line '      * time --memory db_import ./db_import.html'
+    print @@time_opts.usage
     print_line
   end
 end

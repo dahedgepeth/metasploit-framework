@@ -15,6 +15,10 @@ License: BSD-3-clause
 # Last updated: 2013-Nov-04
 #
 
+Files: data/headers/windows/c_payload_util/beacon.h
+Copyright: 2022, Copyright Help/Systems LLC and its group of companies.
+License: Apache 2.0
+
 Files: data/exploits/mysql/lib_mysqludf_sys_*.so
 Copyright: 2007  Roland Bouman
            2008-2010  Roland Bouman and Bernardo Damele A. G.
@@ -129,6 +133,10 @@ License: GNU GPL 2.0
 
 Files: external/source/evasion/windows/process_herpaderping/ProcessHerpaderping/*
 Copyright: 2020 Johnny Shaw
+License: MIT
+
+Files: exteneral/source/exploits/CVE-2022-26904/*
+Copywrite: 2022 Abdelhamid Naceri
 License: MIT
 
 License: BSD-2-clause
