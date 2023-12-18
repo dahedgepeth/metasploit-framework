@@ -13,6 +13,11 @@ module Metasploit::Framework
     #   @return [Boolean]
     attr_accessor :blank_passwords
 
+    # @!attribute nil_passwords
+    #   Whether each username should be tried with a nil password
+    #   @return [Boolean]
+    attr_accessor :nil_passwords
+
     # @!attribute pass_file
     #   Path to a file containing passwords, one per line
     #   @return [String]
@@ -39,6 +44,7 @@ module Metasploit::Framework
     #   A block that can be used to filter credential objects
     attr_accessor :filter
 
+    # @option opts [Boolean] :nil_passwords See {#nil_passwords}
     # @option opts [Boolean] :blank_passwords See {#blank_passwords}
     # @option opts [String] :pass_file See {#pass_file}
     # @option opts [String] :password See {#password}
@@ -47,6 +53,7 @@ module Metasploit::Framework
     # @option opts [String] :user_file See {#user_file}
     # @option opts [String] :username See {#username}
     # @option opts [String] :userpass_file See {#userpass_file}
+    # @option opts [String] :usernames_only See {#usernames_only}
     def initialize(opts = {})
       opts.each do |attribute, value|
         public_send("#{attribute}=", value)
@@ -106,6 +113,7 @@ module Metasploit::Framework
           pass_from_file.chomp!
           yield Metasploit::Framework::Credential.new(private: pass_from_file, realm: realm, private_type: private_type(pass_from_file))
         end
+        pass_fd.seek(0)
       end
       additional_privates.each do |add_private|
         yield Metasploit::Framework::Credential.new(private: add_private, realm: realm, private_type: private_type(add_private))
@@ -133,7 +141,7 @@ module Metasploit::Framework
     #
     # @return [Boolean]
     def has_privates?
-      password.present? || pass_file.present? || !additional_privates.empty? || blank_passwords
+      password.present? || pass_file.present? || !additional_privates.empty? || blank_passwords || nil_passwords
     end
 
     alias each each_filtered
@@ -184,6 +192,11 @@ module Metasploit::Framework
     #   @return [String]
     attr_accessor :userpass_file
 
+    # @!attribute anonymous_login
+    #   Whether to attempt an anonymous login (blank user/pass)
+    #   @return [Boolean]
+    attr_accessor :anonymous_login
+
     # @option opts [Boolean] :blank_passwords See {#blank_passwords}
     # @option opts [String] :pass_file See {#pass_file}
     # @option opts [String] :password See {#password}
@@ -218,7 +231,14 @@ module Metasploit::Framework
 
       prepended_creds.each { |c| yield c }
 
+      if anonymous_login
+        yield Metasploit::Framework::Credential.new(public: '', private: '', realm: realm, private_type: :password)
+      end
+
       if username.present?
+        if nil_passwords
+          yield Metasploit::Framework::Credential.new(public: username, private: nil, realm: realm, private_type: :password)
+        end
         if password.present?
           yield Metasploit::Framework::Credential.new(public: username, private: password, realm: realm, private_type: private_type(password))
         end
@@ -233,6 +253,7 @@ module Metasploit::Framework
             pass_from_file.chomp!
             yield Metasploit::Framework::Credential.new(public: username, private: pass_from_file, realm: realm, private_type: private_type(pass_from_file))
           end
+          pass_fd.seek(0)
         end
         additional_privates.each do |add_private|
           yield Metasploit::Framework::Credential.new(public: username, private: add_private, realm: realm, private_type: private_type(add_private))
@@ -243,6 +264,9 @@ module Metasploit::Framework
         File.open(user_file, 'r:binary') do |user_fd|
           user_fd.each_line do |user_from_file|
             user_from_file.chomp!
+            if nil_passwords
+              yield Metasploit::Framework::Credential.new(public: user_from_file, private: nil, realm: realm, private_type: :password)
+            end
             if password.present?
               yield Metasploit::Framework::Credential.new(public: user_from_file, private: password, realm: realm, private_type: private_type(password) )
             end
@@ -310,7 +334,7 @@ module Metasploit::Framework
     #
     # @return [Boolean]
     def empty?
-      prepended_creds.empty? && !has_users? || (has_users? && !has_privates?)
+      prepended_creds.empty? && !has_users? && !anonymous_login || (has_users? && !has_privates?)
     end
 
     # Returns true when there are any user values set

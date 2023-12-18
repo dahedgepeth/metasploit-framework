@@ -14,6 +14,7 @@ class MetasploitModule < Msf::Auxiliary
   include Msf::Auxiliary::AuthBrute
   include Msf::Auxiliary::CommandShell
   include Msf::Auxiliary::Scanner
+  include Msf::Exploit::Remote::Kerberos::Ticket::Storage
 
   def initialize
     super(
@@ -35,6 +36,11 @@ class MetasploitModule < Msf::Auxiliary
     deregister_options('PASSWORD_SPRAY')
   end
 
+  def run
+    check_winrm_parameters
+    super
+  end
+
   def run_host(ip)
     cred_collection = build_credential_collection(
       realm: datastore['DOMAIN'],
@@ -42,16 +48,42 @@ class MetasploitModule < Msf::Auxiliary
       password: datastore['PASSWORD']
     )
 
+    kerberos_authenticator_factory = nil
+    if datastore['Winrm::Auth'] == Msf::Exploit::Remote::AuthOption::KERBEROS
+      kerberos_authenticator_factory = -> (username, password, realm) do
+        Msf::Exploit::Remote::Kerberos::ServiceAuthenticator::HTTP.new(
+          host: datastore['DomainControllerRhost'],
+          hostname: datastore['Winrm::Rhostname'],
+          proxies: datastore['Proxies'],
+          realm: realm,
+          username: username,
+          password: password,
+          timeout: 20,
+          framework: framework,
+          framework_module: self,
+          cache_file: datastore['Winrm::Krb5Ccname'].blank? ? nil : datastore['Winrm::Krb5Ccname'],
+          mutual_auth: true,
+          use_gss_checksum: true,
+          ticket_storage: kerberos_ticket_storage,
+          offered_etypes: Msf::Exploit::Remote::AuthOption.as_default_offered_etypes(datastore['Winrm::KrbOfferedEncryptionTypes'])
+        )
+      end
+    end
+
+    keep_connection_alive = datastore['CreateSession']
+
     scanner = Metasploit::Framework::LoginScanner::WinRM.new(
       host: ip,
       port: rport,
-      proxies: datastore['PROXIES'],
+      proxies: datastore['Proxies'],
       cred_details: cred_collection,
       stop_on_success: datastore['STOP_ON_SUCCESS'],
       bruteforce_speed: datastore['BRUTEFORCE_SPEED'],
       connection_timeout: 10,
       framework: framework,
-      framework_module: self
+      framework_module: self,
+      kerberos_authenticator_factory: kerberos_authenticator_factory,
+      keep_connection_alive: keep_connection_alive
     )
 
     scanner.scan! do |result|
@@ -67,6 +99,7 @@ class MetasploitModule < Msf::Auxiliary
 
         print_good "#{ip}:#{rport} - Login Successful: #{result.credential}"
         if datastore['CreateSession']
+          http_client = result.connection
           rhost = result.host
           rport = result.port
           uri = datastore['URI']
@@ -78,6 +111,7 @@ class MetasploitModule < Msf::Auxiliary
               endpoint: endpoint,
               host: rhost,
               port: rport,
+              proxies: datastore['Proxies'],
               uri: uri,
               ssl: ssl,
               user: result.credential.public,
@@ -87,7 +121,8 @@ class MetasploitModule < Msf::Auxiliary
               operation_timeout: 1, # For the WinRM server
               timeout: 20, # For the underlying HTTP client
               retry_delay: 1,
-              realm: result.credential.realm
+              realm: result.credential.realm,
+              http_client: http_client
             }
           )
           shell = conn.shell(:stdin, {})

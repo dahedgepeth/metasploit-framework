@@ -475,10 +475,7 @@ module Msf
             0x0
           ].pack(client.arch == ARCH_X86 ? 'VVVVVVVV' : 'QQVVQQVQ')
           result = client.railgun.netapi32.NetUserAdd(server_name, 1, user_info, 4)
-          client.railgun.multi([
-            ['kernel32', 'VirtualFree', [addr_username, 0, MEM_RELEASE]], #  addr_username
-            ['kernel32', 'VirtualFree', [addr_password, 0, MEM_RELEASE]], #  addr_password
-          ])
+          session.railgun.util.free_data(addr_username, addr_password)
           return result
         end
 
@@ -505,9 +502,7 @@ module Msf
             0x0 #  lgrpi1_comment
           ].pack(client.arch == ARCH_X86 ? 'VV' : 'QQ')
           result = client.railgun.netapi32.NetLocalGroupAdd(server_name, 1, localgroup_info, 4)
-          client.railgun.multi([
-            ['kernel32', 'VirtualFree', [addr_group, 0, MEM_RELEASE]], #  addr_group
-          ])
+          session.railgun.util.free_data(addr_group)
           return result
         end
 
@@ -533,9 +528,7 @@ module Msf
             0x0
           ].pack(client.arch == ARCH_X86 ? 'VV' : 'QQ')
           result = client.railgun.netapi32.NetGroupAdd(server_name, 1, group_info_1, 4)
-          client.railgun.multi([
-            ['kernel32', 'VirtualFree', [addr_group, 0, MEM_RELEASE]], #  addr_group
-          ])
+          session.railgun.util.free_data(addr_group)
           return result
         end
 
@@ -561,9 +554,7 @@ module Msf
             addr_username,
           ].pack(client.arch == ARCH_X86 ? 'V' : 'Q')
           result = client.railgun.netapi32.NetLocalGroupAddMembers(server_name, localgroup, 3, localgroup_members, 1)
-          client.railgun.multi([
-            ['kernel32', 'VirtualFree', [addr_username, 0, MEM_RELEASE]],
-          ])
+          session.railgun.util.free_data(addr_username)
           return result
         end
 
@@ -604,7 +595,7 @@ module Msf
           result = client.railgun.netapi32.NetGroupGetUsers(server_name, groupname, 0, 4, 4096, 4, 4, 0)
           if (result['return'] == 0) && ((result['totalentries'] % 4294967296) != 0)
             begin
-              members_info_addr = result['bufptr'].unpack1('V')
+              members_info_addr = result['bufptr']
               unless members_info_addr == 0
                 # Railgun assumes PDWORDS are pointers and returns 8 bytes for x64 architectures.
                 # Therefore we need to truncate the result value to an actual
@@ -641,7 +632,7 @@ module Msf
           result = client.railgun.netapi32.NetLocalGroupGetMembers(server_name, localgroupname, 3, 4, 4096, 4, 4, 0)
           if (result['return'] == 0) && ((result['totalentries'] % 4294967296) != 0)
             begin
-              members_info_addr = result['bufptr'].unpack1('V')
+              members_info_addr = result['bufptr']
               unless members_info_addr == 0
                 members_info = session.railgun.util.read_array(LOCALGROUP_MEMBERS_INFO, (result['totalentries'] % 4294967296), members_info_addr)
                 for member in members_info
@@ -675,7 +666,7 @@ module Msf
           result = client.railgun.netapi32.NetUserEnum(server_name, 0, client.railgun.const(filter), 4, 4096, 4, 4, 0)
           if (result['return'] == 0) && ((result['totalentries'] % 4294967296) != 0)
             begin
-              user_info_addr = result['bufptr'].unpack1('V')
+              user_info_addr = result['bufptr']
               unless user_info_addr == 0
                 user_info = session.railgun.util.read_array(USER_INFO, (result['totalentries'] % 4294967296), user_info_addr)
                 for member in user_info
@@ -708,7 +699,7 @@ module Msf
           result = client.railgun.netapi32.NetLocalGroupEnum(server_name, 0, 4, 4096, 4, 4, 0)
           if (result['return'] == 0) && ((result['totalentries'] % 4294967296) != 0)
             begin
-              localgroup_info_addr = result['bufptr'].unpack1('V')
+              localgroup_info_addr = result['bufptr']
               unless localgroup_info_addr == 0
                 localgroup_info = session.railgun.util.read_array(LOCALGROUP_INFO, (result['totalentries'] % 4294967296), localgroup_info_addr)
                 for member in localgroup_info
@@ -741,7 +732,7 @@ module Msf
           result = client.railgun.netapi32.NetGroupEnum(server_name, 0, 4, 4096, 4, 4, 0)
           if (result['return'] == 0) && ((result['totalentries'] % 4294967296) != 0)
             begin
-              group_info_addr = result['bufptr'].unpack1('V')
+              group_info_addr = result['bufptr']
               unless group_info_addr == 0
                 group_info = session.railgun.util.read_array(GROUP_INFO, (result['totalentries'] % 4294967296), group_info_addr)
                 for member in group_info
